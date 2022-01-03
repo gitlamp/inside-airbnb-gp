@@ -1,0 +1,7 @@
+*.csv
+*.csv.*
+*.ini
+*.geojson
+*.qvf
+*.ipynb
+*.idea
