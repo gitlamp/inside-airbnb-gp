@@ -3,8 +3,6 @@ import os
 import pandas as pd
 import pandas.io.sql as sqlio
 from configparser import ConfigParser
-from pyowm import OWM
-from pyowm.commons.exceptions import PyOWMError
 from tqdm import tqdm
 from ratelimit import limits, sleep_and_retry
 from sklearn.cluster import KMeans
@@ -56,6 +54,7 @@ def gen_cluster(df, n_clusters=1000):
         print(err)
 
 
+@sleep_and_retry
 @limits(calls=500, period=24*60*60)
 def call_dksky_api(key, lat, long, time):
 
@@ -75,25 +74,6 @@ def call_dksky_api(key, lat, long, time):
 
         return res
     except Exception as err:
-        print(err)
-
-
-@sleep_and_retry
-@limits(calls=60, period=60)
-def call_owm_api(key, lat, long):
-
-    try:
-        for k in key:
-            owm = OWM(k)
-            # weather manager
-            wmgr = owm.weather_manager()
-            amgr = owm.airpollution_manager()
-            w = wmgr.weather_at_coords(float(lat), float(long)).weather
-            air = amgr.air_quality_at_coords(float(lat), float(long))
-
-            return w, air
-
-    except (Exception, PyOWMError) as err:
         print(err)
 
 
@@ -145,6 +125,7 @@ def connect():
                 CONSTRAINT dksky_sk
                     PRIMARY KEY,
             airbnb_id      integer NOT NULL,
+            last_scraped   date,
             icon           text,
             cloudCover     float4,
             ozone          float4,
@@ -232,6 +213,7 @@ def connect():
                 for id in list_id:
                     query = """
                             INSERT INTO dksky(airbnb_id,
+                                            last_scraped,
                                             icon,
                                             cloudCover,
                                             ozone,
@@ -241,9 +223,10 @@ def connect():
                                             summary,
                                             time,
                                             windSpeed)
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                             """
                     values = (id,
+                              last_scraped,
                               res['icon'],
                               res['cloudCover'],
                               res['ozone'],
@@ -257,40 +240,7 @@ def connect():
                 conn.commit()
                 dbar.update(1)
 
-        # Open Weather Map
-        query = """
-                SELECT ARRAY_AGG(airbnb_id), latitude, longitude
-                FROM cluster 
-                GROUP BY latitude, longitude;
-                """
-        cur.execute(query)
-        row = cur.fetchall()
-        key = read_config(section='openweathermap')['owm_key']
-
-        with tqdm(total=len(row), desc='Calling OWM api', unit='req') as obar:
-            for list_id, lat, long in row:
-                # call OWM API
-                w, air = call_owm_api(key, lat, long)
-                query = """
-                        INSERT INTO owm(listing_id, clouds, status, temp, humidity, co, o3, no2, so2)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                        """
-                values = (id,
-                          w.clouds,
-                          w.status,
-                          w.temperature('celsius').get('temp'),
-                          w.humidity,
-                          air.co,
-                          air.o3,
-                          air.no2,
-                          air.so2)
-                if w and air:
-                    cur.execute(query, values)
-                    obar.update(1)
-                    conn.commit()
-
         dbar.close()
-        obar.close()
         cur.close()
 
     except(Exception, psycopg2.DatabaseError) as err:

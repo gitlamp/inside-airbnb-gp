@@ -5,3 +5,5 @@
 *.qvf
 *.ipynb
 *.idea
+export/**
+**/*.DS_store
